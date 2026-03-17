@@ -40,6 +40,6 @@ python dqn.py test dqn_model_baseline.pt
 
 ## Training Performance
 
-![Training Plots](src/dqn_training_baseline.png)
+![Training Plots](dqn_training_baseline.png)
 
 The left plot shows cumulative reward per episode (with 100-episode moving average), and the right plot shows reward per step (RPS). Expected behavior: an initial exploration phase with low rewards, followed by a steady climb as the agent learns to approach and push the object.
