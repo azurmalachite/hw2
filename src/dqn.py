@@ -17,23 +17,24 @@ import matplotlib.pyplot as plt
 from homework2 import Hw2Env
 
 # ─── Hyperparameters ───
-N_ACTIONS = 8
+N_ACTIONS = 16
 GAMMA = 0.99
 EPSILON = 1.0
-EPSILON_DECAY = 0.999
+EPSILON_DECAY = 0.998
 EPSILON_DECAY_ITER = 10       # decay epsilon every 10 optimization steps
-MIN_EPSILON = 0.1
-LEARNING_RATE = 0.0003
+MIN_EPSILON = 0.05
+LEARNING_RATE = 0.0005
 BATCH_SIZE = 128
-UPDATE_FREQ = 2               # optimize every 2 env steps
-TARGET_NETWORK_UPDATE_FREQ = 500   # update target net every 500 optimization steps
+UPDATE_FREQ = 1               # optimize every env step
+TARGET_NETWORK_UPDATE_FREQ = 300   # update target net every 300 optimization steps
 BUFFER_LENGTH = 50000
-REPLAY_WARMUP = 2000
-PROGRESS_REWARD_SCALE = 8.0
-TERMINAL_SUCCESS_BONUS = 8.0
-TRUNCATION_PENALTY = 1.0
-STUCK_PENALTY = 0.1
-NUM_EPISODES = 5000
+REPLAY_WARMUP = 1000
+APPROACH_REWARD_SCALE = 10.0  # reward EE getting closer to object
+PUSH_REWARD_SCALE = 15.0      # reward object getting closer to goal
+TERMINAL_SUCCESS_BONUS = 20.0
+TRUNCATION_PENALTY = 2.0
+STUCK_PENALTY = 0.5
+NUM_EPISODES = 2500
 USE_HIGH_LEVEL_STATE = True
 
 
@@ -84,10 +85,10 @@ class MLPQNetwork(nn.Module):
     def __init__(self, state_dim, n_actions):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(state_dim, 64), nn.ReLU(),
-            nn.Linear(64, 64), nn.ReLU(),
-            nn.Linear(64, 64), nn.ReLU(),
-            nn.Linear(64, n_actions),
+            nn.Linear(state_dim, 128), nn.ReLU(),
+            nn.Linear(128, 128), nn.ReLU(),
+            nn.Linear(128, 128), nn.ReLU(),
+            nn.Linear(128, n_actions),
         )
 
     def forward(self, x):
@@ -186,6 +187,7 @@ def train():
         env.reset()
         obs = get_obs(env)
         prev_hs = env.high_level_state()
+        prev_ee_obj_dist = np.linalg.norm(prev_hs[0:2] - prev_hs[2:4])
         prev_obj_goal_dist = np.linalg.norm(prev_hs[2:4] - prev_hs[4:6])
         done = False
         cumulative_reward = 0.0
@@ -200,11 +202,17 @@ def train():
 
             next_obs = get_obs(env)
             curr_hs = env.high_level_state()
+            curr_ee_obj_dist = np.linalg.norm(curr_hs[0:2] - curr_hs[2:4])
             curr_obj_goal_dist = np.linalg.norm(curr_hs[2:4] - curr_hs[4:6])
 
-            # Reward shaping aimed at success, while still retaining the original reward.
-            progress_bonus = (prev_obj_goal_dist - curr_obj_goal_dist) * PROGRESS_REWARD_SCALE
-            train_reward = reward + progress_bonus
+            # Two-phase reward shaping:
+            # Phase 1: Reward EE approaching the object
+            approach_bonus = (prev_ee_obj_dist - curr_ee_obj_dist) * APPROACH_REWARD_SCALE
+            # Phase 2: Reward object moving toward goal
+            push_bonus = (prev_obj_goal_dist - curr_obj_goal_dist) * PUSH_REWARD_SCALE
+
+            train_reward = reward + approach_bonus + push_bonus
+
             if is_terminal:
                 train_reward += TERMINAL_SUCCESS_BONUS
                 was_success = True
@@ -221,6 +229,7 @@ def train():
 
             obs = next_obs
             prev_hs = curr_hs
+            prev_ee_obj_dist = curr_ee_obj_dist
             prev_obj_goal_dist = curr_obj_goal_dist
             cumulative_reward += reward
             episode_steps += 1
@@ -242,9 +251,13 @@ def train():
             print(f"Episodes {episode-98:4d}-{episode+1:4d} | Success rate: {success_rate:.2%}")
             success_count = 0
 
+    # Determine run label
+    run_label = os.environ.get("RUN_LABEL", "baseline")
+
     # Save model
-    torch.save(agent.q_net.state_dict(), "dqn_model.pt")
-    print("Model saved to dqn_model.pt")
+    model_path = f"dqn_model_{run_label}.pt"
+    torch.save(agent.q_net.state_dict(), model_path)
+    print(f"Model saved to {model_path}")
 
     # ─── Plotting ───
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
@@ -257,7 +270,7 @@ def train():
         axes[0].plot(range(window-1, len(episode_rewards)), smoothed, label=f"Moving Avg ({window})")
     axes[0].set_xlabel("Episode")
     axes[0].set_ylabel("Cumulative Reward")
-    axes[0].set_title("Reward per Episode")
+    axes[0].set_title(f"Reward per Episode ({run_label})")
     axes[0].legend()
     axes[0].grid(True, alpha=0.3)
 
@@ -267,13 +280,14 @@ def train():
         axes[1].plot(range(window-1, len(episode_rps)), smoothed, label=f"Moving Avg ({window})")
     axes[1].set_xlabel("Episode")
     axes[1].set_ylabel("Reward per Step")
-    axes[1].set_title("RPS per Episode")
+    axes[1].set_title(f"RPS per Episode ({run_label})")
     axes[1].legend()
     axes[1].grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig("dqn_training_plots.png", dpi=150)
-    print("Plots saved to dqn_training_plots.png")
+    plot_path = f"dqn_training_{run_label}.png"
+    plt.savefig(plot_path, dpi=150)
+    print(f"Plots saved to {plot_path}")
 
 
 # ─── Test / Evaluate learned policy ───
